@@ -8,7 +8,9 @@ I have no idea how but beware if computer storage is almost full.
 
 
 # Download latest version
-path = kagglehub.dataset_download("awsaf49/brats2020-training-data", path='') #BRATS 2020 Dataser
-path = kagglehub.dataset_download("nguyenthanhkhanh/brats2024-small-dataset") #BRATS 2024 Data
+BRaTS20 = kagglehub.dataset_download("awsaf49/brats20-dataset-training-validation") #BRATS 2020 Dataset
+BRaTS24 = kagglehub.dataset_download("nguyenthanhkhanh/brats2024-small-dataset") #BRATS 2024 Dataset
 
-print('Dataset downloaded to:', path)
+
+print('Dataset downloaded to:', BRaTS20)
+print('Dataset downloaded to:', BRaTS24)
