@@ -13,3 +13,8 @@ torch
 albumentations
 jupyter
 kagglehub
+scikit-image
+nilearn
+tensorflow
+seaborn
+pydot
