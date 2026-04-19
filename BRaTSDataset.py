@@ -51,7 +51,7 @@ import albumentations as A
 
 
 from albumentations import Compose, HorizontalFlip
-# from albumentations.pytorch import ToTensor, ToTensorV2
+from albumentations.pytorch import ToTensorV2
 
 import warnings
 warnings.simplefilter("ignore")
@@ -73,62 +73,50 @@ class BratsDataset(Dataset):
         return self.df.shape[0]
 
     def __getitem__(self, idx):
-        # at a specified index ( idx ) select the value under 'Brats20ID' & asssign it to id_
         id_ = self.df.loc[idx, 'Brats20ID']
-
-        # As we've got the id_ , now find the path of the entry by asserting the Brats20ID to id_
         root_path = self.df.loc[self.df['Brats20ID'] == id_]['path'].values[0]
 
-        # load all modalities
         images = []
-
         for data_type in self.data_types:
-            # here data_type is appended to the root path, as it only contains the name without the datatype such as .nii etc
             img_path = os.path.join(root_path, id_ + data_type)
-            print(f'{id_} image path {img_path}')
-            img = self.load_img(img_path)#.transpose(2, 0, 1)
+            img = self.load_img(img_path)           # (240, 240, 155)
 
             if self.is_resize:
-                img = self.resize(img)
+                img = self.resize(img)              # (78, 120, 120)
 
             img = self.normalize(img)
             images.append(img)
 
-        # stacking all the t1 , t1ce , t2 , t2 flair files of a single ID in a stack
-        img = np.stack(images)
-        img = np.moveaxis(img, (0, 1, 2, 3), (0, 3, 2, 1))
+        img = np.stack(images)                      # (4, 78, 120, 120) or (4, 240, 240, 155)
+
+        # ✅ Pick middle slice AFTER resize, along last axis (depth)
+        slice_idx = img.shape[-1] // 2             # 60 if resized, 77 if not
+        img = img[..., slice_idx]                  # (4, 78, 120) or (4, 240, 240)
+        img = np.moveaxis(img, 0, -1)             # (78, 120, 4) or (240, 240, 4) = (H, W, C) ✅
 
         if self.phase != "test":
-            mask_path =  os.path.join(root_path, id_ + "_seg.nii")
-            mask = self.load_img(mask_path)
+            mask_path = os.path.join(root_path, id_ + "_seg.nii")
+            mask = self.load_img(mask_path)         # (240, 240, 155)
 
             if self.is_resize:
-                mask = self.resize(mask)
-                # mask --> conversion to uint8 --> normalization / clipping ( 0 to 1 ) --> conversion to float32
+                mask = self.resize(mask)            # (78, 120, 120)
                 mask = np.clip(mask.astype(np.uint8), 0, 1).astype(np.float32)
-                # again clipping ( 0 to 1 )
-                mask = np.clip(mask, 0, 1)
 
-            # setting the mask labels 1 , 2 , 4 for the mask file ( _seg.ii )
-            mask = self.preprocess_mask_labels(mask)
+            # ✅ Same slice index as image
+            mask = mask[..., slice_idx]            # (78, 120) or (240, 240)
+            mask = self.preprocess_mask_labels(mask)  # (78, 120, 3) = (H, W, C) ✅
 
-            augmented = self.augmentations(image=img.astype(np.float32),
-                                           mask=mask.astype(np.float32))
-            # Several augmentations / transformations like flipping, rotating, padding will be applied to both the images
-            img = augmented['image']
-            mask = augmented['mask']
+            augmented = self.augmentations(
+                image=img.astype(np.float32),
+                mask=mask.astype(np.float32)
+            )
+            img = augmented['image']               # (C, H, W) after ToTensorV2
+            mask = augmented['mask']               # (C, H, W) after ToTensorV2
 
+            return {"Id": id_, "image": img, "mask": mask}
 
-            return {
-                "Id": id_,
-                "image": img,
-                "mask": mask,
-            }
+        return {"Id": id_, "image": img}
 
-        return {
-            "Id": id_,
-            "image": img,
-        }
 
     def load_img(self, file_path):
         data = nib.load(file_path)
@@ -145,50 +133,42 @@ class BratsDataset(Dataset):
         return data
 
     def preprocess_mask_labels(self, mask: np.ndarray):
+        # Input: (240, 240) — a single 2D slice
 
-        # whole tumour
         mask_WT = mask.copy()
         mask_WT[mask_WT == 1] = 1
         mask_WT[mask_WT == 2] = 1
         mask_WT[mask_WT == 4] = 1
-        # include all tumours
 
-        # NCR / NET - LABEL 1
         mask_TC = mask.copy()
         mask_TC[mask_TC == 1] = 1
         mask_TC[mask_TC == 2] = 0
         mask_TC[mask_TC == 4] = 1
-        # exclude 2 / 4 labelled tumour
 
-        # ET - LABEL 4
         mask_ET = mask.copy()
         mask_ET[mask_ET == 1] = 0
         mask_ET[mask_ET == 2] = 0
         mask_ET[mask_ET == 4] = 1
-        # exclude 2 / 1 labelled tumour
 
-        # ED - LABEL 2
-        # mask_ED = mask.copy()
-        # mask_ED[mask_ED == 1] = 0
-        # mask_ED[mask_ED == 2] = 1
-        # mask_ED[mask_ED == 4] = 0
-
-
-        # mask = np.stack([mask_WT, mask_TC, mask_ET, mask_ED])
-        mask = np.stack([mask_WT, mask_TC, mask_ET])
-        mask = np.moveaxis(mask, (0, 1, 2, 3), (0, 3, 2, 1))
+        mask = np.stack([mask_WT, mask_TC, mask_ET])  # (3, 240, 240)
+        mask = np.moveaxis(mask, 0, -1)               # (240, 240, 3) = (H, W, C) ✅
 
         return mask
     
-    
 
 def get_augmentations(phase):
-    list_transforms = []
+    list_transforms = [
+        A.Resize(128, 128),
+    ]
+    if phase == "train":
+        list_transforms += [
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.Rotate(limit=15, p=0.3),
+        ]
+    list_transforms.append(ToTensorV2(transpose_mask=True))  # mask (H,W,C)→(C,H,W)
 
-    # Does data augmentations & tranformation required for IMAGES & MASKS
-    # they include cropping, padding, flipping , rotating
-    list_trfms = Compose(list_transforms)
-    return list_trfms
+    return A.Compose(list_transforms)
 
 def get_dataloader(
     dataset: torch.utils.data.Dataset,
@@ -252,7 +232,6 @@ def get_dataloader(
         shuffle=True,
     )
     return dataloader
-
 
 
 
@@ -386,7 +365,6 @@ class Image3dToGIF3d:
 
 
 class ShowResult:
-
     def mask_preprocessing(self, mask):
         """
         Test.
