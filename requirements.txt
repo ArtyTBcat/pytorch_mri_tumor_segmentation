@@ -18,3 +18,4 @@ nilearn
 tensorflow
 seaborn
 pydot
+opencv-python
